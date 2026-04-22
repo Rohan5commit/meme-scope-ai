@@ -118,7 +118,7 @@ export function buildFallbackReport({ input, enrichment, reason }: FallbackArgs)
   const riskFlags = [
     {
       title: !input.contractAddress ? 'Contract ambiguity' : 'Contract still needs direct review',
-      severity: (!input.contractAddress ? 'high' : 'medium') as const,
+      severity: !input.contractAddress ? 'high' : 'medium',
       rationale: !input.contractAddress
         ? 'The exact onchain asset is not pinned down, so ticker collisions and spoofing risk remain material.'
         : 'Even with a contract address, holder distribution, permissions, and deployment history still need direct checks.',
