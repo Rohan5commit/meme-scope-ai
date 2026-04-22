@@ -84,8 +84,7 @@
 
         const content = payload.choices?.[0]?.message?.content;
         const text = Array.isArray(content)
-          ? content.map((part) => part.text ?? '').join('
-').trim()
+          ? content.map((part) => part.text ?? '').join('\n').trim()
           : (content ?? '').trim();
 
         if (!text) {
