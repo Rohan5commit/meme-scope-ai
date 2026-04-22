@@ -1,17 +1,17 @@
-'use client';
-
 import Link from 'next/link';
-import { useMemo } from 'react';
 import { ArrowLeft, Link2, TriangleAlert } from 'lucide-react';
-import { useSearchParams } from 'next/navigation';
 import { ResultsDashboard } from '@/components/results-dashboard';
 import { decodeReportPayload } from '@/lib/share';
 import { APP_NAME } from '@/lib/constants';
 
-export default function ReportPage() {
-  const searchParams = useSearchParams();
-  const payload = searchParams.get('payload');
-  const report = useMemo(() => (payload ? decodeReportPayload(payload) : null), [payload]);
+interface ReportPageProps {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+export default async function ReportPage({ searchParams }: ReportPageProps) {
+  const params = await searchParams;
+  const payload = typeof params.payload === 'string' ? params.payload : Array.isArray(params.payload) ? params.payload[0] : undefined;
+  const report = payload ? decodeReportPayload(payload) : null;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-8 px-4 py-10 md:px-8">
