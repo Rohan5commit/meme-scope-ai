@@ -10,6 +10,10 @@ interface FallbackArgs {
   reason: string;
 }
 
+interface EmergencyFallbackArgs extends FallbackArgs {
+  fallbackReason?: string;
+}
+
 function inferNarrativeTag(input: NormalizedInput) {
   const haystack = [input.projectName, input.ticker, input.notes].filter(Boolean).join(' ').toLowerCase();
 
@@ -103,11 +107,15 @@ export function buildFallbackReport({ input, enrichment, reason }: FallbackArgs)
   const marketPresent = Boolean(enrichment.dexPair);
   const websitePresent = Boolean(enrichment.websitePreview);
 
-  const missingData = dedupeStrings([...enrichment.missingData]).slice(0, 10);
+  const missingData = dedupeStrings(enrichment.missingData.map((item) => limitText(item, 160)))
+    .map((item) => limitText(item, 160))
+    .slice(0, 10);
   const dataWarnings = dedupeStrings([
-    ...enrichment.warnings,
+    ...enrichment.warnings.map((item) => limitText(item, 220)),
     `Live LLM generation was unavailable, so MemeScope emitted a deterministic backup report: ${limitText(reason, 140)}.`,
-  ]).slice(0, 12);
+  ])
+    .map((item) => limitText(item, 220))
+    .slice(0, 12);
 
   const clarity = clamp((input.projectName ? 3 : 1) + (input.websiteUrl ? 2 : 0) + (input.notes ? 2 : 0) + (marketPresent ? 2 : 0), 2, 9);
   const narrativeStrength = clamp((input.ticker ? 3 : 1) + (input.notes ? 2 : 0) + (websitePresent ? 1 : 0) + (/meme|ai|dog|cat|frog|pepe|bonk|mog|fart/i.test([input.projectName, input.ticker, input.notes].join(' ')) ? 2 : 0), 3, 9);
@@ -230,9 +238,149 @@ export function buildFallbackReport({ input, enrichment, reason }: FallbackArgs)
     missingData,
     dataWarnings,
     sourceNotes: dedupeStrings([
-      ...enrichment.sourceNotes,
+      ...enrichment.sourceNotes.map((item) => limitText(item, 220)),
       `Backup mode summary generated from explicit inputs and any successfully retrieved public metadata.`,
       input.websiteUrl ? `Website host: ${hostFromUrl(input.websiteUrl)}` : '',
-    ]).slice(0, 12),
+    ])
+      .map((item) => limitText(item, 220))
+      .slice(0, 12),
+  });
+}
+
+export function buildEmergencyFallbackReport({
+  input,
+  enrichment,
+  reason,
+  fallbackReason,
+}: EmergencyFallbackArgs): AnalysisReport {
+  const projectLabel = limitText(buildProjectLabel(input) || 'Unknown project', 120);
+  const missingData = dedupeStrings(
+    [
+      ...enrichment.missingData.map((item) => limitText(item, 160)),
+      'Live model output was unavailable, so this report uses the emergency backup renderer.',
+    ],
+  )
+    .map((item) => limitText(item, 160))
+    .slice(0, 10);
+
+  const dataWarnings = dedupeStrings(
+    [
+      ...enrichment.warnings.map((item) => limitText(item, 220)),
+      `Emergency backup report used after generation failure: ${limitText(reason, 120)}.`,
+      fallbackReason ? `Fallback renderer recovery note: ${limitText(fallbackReason, 120)}.` : '',
+    ],
+  )
+    .map((item) => limitText(item, 220))
+    .slice(0, 12);
+
+  const sourceNotes = dedupeStrings(
+    [
+      ...enrichment.sourceNotes.map((item) => limitText(item, 220)),
+      'Emergency backup mode used to guarantee a stable, shareable report.',
+      input.websiteUrl ? limitText(`Website host: ${hostFromUrl(input.websiteUrl)}`, 220) : '',
+    ],
+  )
+    .map((item) => limitText(item, 220))
+    .slice(0, 12);
+
+  return analysisReportSchema.parse({
+    input,
+    projectLabel,
+    generatedAt: new Date().toISOString(),
+    analysisMode: 'fallback',
+    executiveSummary: `${projectLabel} could not complete the full live analysis path, so MemeScope returned a compact emergency memo instead. Use it as a fast operator brief, then verify contract, holder structure, liquidity, and primary-source messaging before acting.`,
+    bullCase: [
+      `${projectLabel} is still easy to summarize quickly, which is valuable for a demo and for first-pass research.`,
+      'MemeScope preserved the core diligence workflow instead of failing hard when live generation became unreliable.',
+      'Users can still leave with a risk-aware memo, checklist, and social-ready framing even under degraded conditions.',
+    ],
+    bearCase: [
+      'This path intentionally sacrifices nuance to guarantee stability.',
+      'Missing source data still limits conviction until the operator checks the primary links directly.',
+      'Emergency output should support diligence, not replace contract-level and market-structure verification.',
+    ],
+    riskFlags: [
+      {
+        title: 'Primary-source verification still required',
+        severity: 'high',
+        rationale: 'Emergency mode is designed for continuity, not for high-conviction judgment under uncertainty.',
+        evidence: input.contractAddress ? limitText(input.contractAddress, 220) : 'No contract address provided',
+      },
+      {
+        title: 'Model path degraded',
+        severity: 'medium',
+        rationale: 'The live generation path did not complete cleanly, so the memo is intentionally conservative.',
+        evidence: limitText(reason, 220),
+      },
+      {
+        title: 'Narrative context may be incomplete',
+        severity: 'medium',
+        rationale: 'Without complete social and contract context, meme-token narratives can be misleading.',
+        evidence: input.xHandle ? limitText(`Handle supplied: ${input.xHandle}`, 220) : 'No X/Twitter handle provided',
+      },
+    ],
+    narrative: {
+      memeAngle: `${projectLabel} should be framed as a fast, evidence-aware meme research candidate rather than a certainty-heavy call.`,
+      audience: 'Traders, creators, and communities who need a rapid first-pass memo before deeper diligence.',
+      positioning: `${projectLabel} is best presented as a quick operator brief with explicit uncertainty handling.`,
+      whyItSpreads: 'This format spreads because it compresses noisy inputs into a simple, readable memo with visible caveats.',
+    },
+    diligenceChecklist: [
+      {
+        item: 'Confirm contract and chain',
+        whyItMatters: 'It anchors every later check to the exact asset.',
+        status: 'required',
+      },
+      {
+        item: 'Inspect holders and liquidity',
+        whyItMatters: 'Concentration and exit depth drive downside in meme launches.',
+        status: 'required',
+      },
+      {
+        item: 'Review website and socials directly',
+        whyItMatters: 'Primary sources often expose narrative drift or weak execution.',
+        status: 'recommended',
+      },
+      {
+        item: 'Add manual operator notes',
+        whyItMatters: 'The analysis sharpens once explicit context is added.',
+        status: 'manual',
+      },
+    ],
+    socialPosts: {
+      launchThread: [
+        `1/ ${projectLabel} is in emergency memo mode: quick read, clear caveats, and no fake certainty.`,
+        '2/ Use this output to frame the opportunity and the risks before spending time on deeper due diligence.',
+        '3/ Priority checks: confirm contract, inspect holders/liquidity, and compare website + socials for consistency.',
+        '4/ The goal is reliability under noisy conditions, not hype masquerading as conviction.',
+      ],
+      shortPost: `${projectLabel}: emergency memo mode is live. Fast summary, visible caveats, and a diligence checklist before deeper research.`,
+      disclaimer: 'For research support only — not financial advice.',
+    },
+    scorecard: {
+      clarity: {
+        score: 6.2,
+        rationale: 'The memo stays readable even when the richer model path is unavailable.',
+      },
+      narrativeStrength: {
+        score: 6.4,
+        rationale: 'Narrative assessment is intentionally conservative in emergency mode.',
+      },
+      risk: {
+        score: 4.8,
+        rationale: 'Risk remains elevated until contract, holders, and primary messaging are verified directly.',
+      },
+      communityPotential: {
+        score: 6.0,
+        rationale: 'Community potential depends on social proof and repeatable meme identity, both of which still need checks.',
+      },
+    },
+    confidence: {
+      score: 42,
+      rationale: 'Confidence is capped because emergency mode prioritizes availability over deeper model reasoning.',
+    },
+    missingData,
+    dataWarnings,
+    sourceNotes,
   });
 }
