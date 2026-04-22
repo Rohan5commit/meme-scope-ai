@@ -3,6 +3,7 @@ export interface TextGenerationRequest {
   userPrompt: string;
   temperature?: number;
   maxTokens?: number;
+  timeoutMs?: number;
 }
 
 export interface TextGenerationResponse {
