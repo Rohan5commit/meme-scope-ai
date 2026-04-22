@@ -1,5 +1,5 @@
 import type { NormalizedInput } from '@/lib/schema';
-import { dedupeStrings, formatCompact, formatCurrency, hostFromUrl, limitText, safeNumber, withTimeout } from '@/lib/utils';
+import { dedupeStrings, formatCurrency, hostFromUrl, limitText, safeNumber } from '@/lib/utils';
 
 export interface DexPairSnapshot {
   query: string;
@@ -34,6 +34,39 @@ export interface EnrichmentContext {
   missingData: string[];
   warnings: string[];
   sourceNotes: string[];
+}
+
+interface EnrichmentOptions {
+  deadlineAt?: number;
+}
+
+const DEX_QUERY_TIMEOUT_MS = 2_500;
+const MAX_DEX_QUERIES = 2;
+const WEBSITE_TIMEOUT_MS = 2_500;
+const MIN_ENRICHMENT_BUDGET_MS = 900;
+
+function remainingBudget(deadlineAt?: number) {
+  return deadlineAt ? deadlineAt - Date.now() : Number.POSITIVE_INFINITY;
+}
+
+async function fetchWithAbort(url: string, init: RequestInit, timeoutMs: number, label: string) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function candidateQueries(input: NormalizedInput) {
@@ -71,19 +104,25 @@ function flattenSocialUrl(item: Record<string, unknown>) {
   return handle ? `${platform}:${handle}` : platform;
 }
 
-async function fetchDexScreenerPair(input: NormalizedInput) {
-  const queries = candidateQueries(input);
+async function fetchDexScreenerPair(input: NormalizedInput, deadlineAt?: number) {
+  const queries = candidateQueries(input).slice(0, MAX_DEX_QUERIES);
 
   for (const query of queries) {
+    const budget = Math.min(DEX_QUERY_TIMEOUT_MS, remainingBudget(deadlineAt) - 250);
+    if (budget < MIN_ENRICHMENT_BUDGET_MS) {
+      break;
+    }
+
     const endpoint = `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`;
-    const response = await withTimeout(
-      fetch(endpoint, {
+    const response = await fetchWithAbort(
+      endpoint,
+      {
         cache: 'no-store',
         headers: {
           Accept: 'application/json',
         },
-      }),
-      7000,
+      },
+      budget,
       'DexScreener',
     );
 
@@ -153,16 +192,22 @@ function extractMeta(html: string, key: string, attr: 'name' | 'property' = 'nam
   return decodeHtml(html.match(regex)?.[1] ?? '');
 }
 
-async function fetchWebsitePreview(url: string) {
-  const response = await withTimeout(
-    fetch(url, {
+async function fetchWebsitePreview(url: string, deadlineAt?: number) {
+  const budget = Math.min(WEBSITE_TIMEOUT_MS, remainingBudget(deadlineAt) - 250);
+  if (budget < MIN_ENRICHMENT_BUDGET_MS) {
+    throw new Error('Not enough budget remaining for website enrichment.');
+  }
+
+  const response = await fetchWithAbort(
+    url,
+    {
       cache: 'no-store',
       headers: {
         'User-Agent': 'MemeScopeAI/0.1 (+https://github.com/Rohan5commit/meme-scope-ai)',
         Accept: 'text/html,application/xhtml+xml',
       },
-    }),
-    7000,
+    },
+    budget,
     'Website fetch',
   );
 
@@ -185,53 +230,65 @@ async function fetchWebsitePreview(url: string) {
   } satisfies WebsitePreview;
 }
 
-export async function buildEnrichmentContext(input: NormalizedInput): Promise<EnrichmentContext> {
+export async function buildEnrichmentContext(input: NormalizedInput, options: EnrichmentOptions = {}): Promise<EnrichmentContext> {
+  const { deadlineAt } = options;
   const missingData: string[] = [];
   const warnings: string[] = [];
   const sourceNotes: string[] = [];
 
   let dexPair: DexPairSnapshot | undefined;
   let websitePreview: WebsitePreview | undefined;
+  const tasks: Array<Promise<void>> = [];
 
   if (process.env.DEXSCREENER_ENABLED !== 'false' && (input.contractAddress || input.ticker || input.projectName || input.rawQuery)) {
-    try {
-      const result = await fetchDexScreenerPair(input);
-      if (result) {
-        dexPair = result.pair;
-        sourceNotes.push(
-          limitText(
-            `DexScreener: ${dexPair.baseTokenSymbol}/${dexPair.quoteTokenSymbol ?? '?'} on ${dexPair.chainId} via ${dexPair.dexId} • liquidity ${formatCurrency(dexPair.liquidityUsd)} • volume 24h ${formatCurrency(dexPair.volume24h)}`,
-            220,
-          ),
-        );
-        if (result.candidateCount > 1) {
-          warnings.push(`DexScreener returned ${result.candidateCount} possible matches. MemeScope selected the highest-signal candidate.`);
+    tasks.push(
+      (async () => {
+        try {
+          const result = await fetchDexScreenerPair(input, deadlineAt);
+          if (result) {
+            dexPair = result.pair;
+            sourceNotes.push(
+              limitText(
+                `DexScreener: ${dexPair.baseTokenSymbol}/${dexPair.quoteTokenSymbol ?? '?'} on ${dexPair.chainId} via ${dexPair.dexId} • liquidity ${formatCurrency(dexPair.liquidityUsd)} • volume 24h ${formatCurrency(dexPair.volume24h)}`,
+                220,
+              ),
+            );
+            if (result.candidateCount > 1) {
+              warnings.push(`DexScreener returned ${result.candidateCount} possible matches. MemeScope selected the highest-signal candidate.`);
+            }
+          } else {
+            missingData.push('No DexScreener market match was found from the provided identifiers.');
+          }
+        } catch (error) {
+          warnings.push(`DexScreener enrichment failed: ${error instanceof Error ? limitText(error.message, 120) : 'unknown error'}.`);
         }
-      } else {
-        missingData.push('No DexScreener market match was found from the provided identifiers.');
-      }
-    } catch (error) {
-      warnings.push(`DexScreener enrichment failed: ${error instanceof Error ? limitText(error.message, 120) : 'unknown error'}.`);
-    }
+      })(),
+    );
   } else {
     missingData.push('No market-searchable identifier was available for token enrichment.');
   }
 
   if (process.env.WEBSITE_ENRICHMENT_ENABLED !== 'false' && input.websiteUrl) {
-    try {
-      websitePreview = await fetchWebsitePreview(input.websiteUrl);
-      sourceNotes.push(
-        limitText(
-          `Website metadata from ${websitePreview.host}: ${websitePreview.title ?? 'no title'}${websitePreview.description ? ` • ${websitePreview.description}` : ''}`,
-          220,
-        ),
-      );
-    } catch (error) {
-      warnings.push(`Website enrichment failed: ${error instanceof Error ? limitText(error.message, 120) : 'unknown error'}.`);
-    }
+    tasks.push(
+      (async () => {
+        try {
+          websitePreview = await fetchWebsitePreview(input.websiteUrl!, deadlineAt);
+          sourceNotes.push(
+            limitText(
+              `Website metadata from ${websitePreview.host}: ${websitePreview.title ?? 'no title'}${websitePreview.description ? ` • ${websitePreview.description}` : ''}`,
+              220,
+            ),
+          );
+        } catch (error) {
+          warnings.push(`Website enrichment failed: ${error instanceof Error ? limitText(error.message, 120) : 'unknown error'}.`);
+        }
+      })(),
+    );
   } else {
     missingData.push('No website URL was supplied, so product messaging had to be inferred from other signals.');
   }
+
+  await Promise.all(tasks);
 
   if (!input.xHandle) {
     missingData.push('No X/Twitter handle was supplied, so social narrative context is limited.');
