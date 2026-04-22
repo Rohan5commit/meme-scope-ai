@@ -23,7 +23,7 @@ This repo is optimized for **hackathon reliability**:
 
 ## Why this project fits Four.Meme AI Sprint
 
-MemeScope AI is intentionally aligned to the current public competition summary for the Four.Meme AI Sprint: AI is required, AI x Web3 / AI x Meme is encouraged, a working repo and demo video are required, token issuance is optional, and judging emphasizes innovation, technical implementation, practical value, and presentation. Public summary source: [CompeteHub – Four.Meme AI Sprint](https://www.competehub.dev/en/competitions/dorahacksfourmemeaisprint).
+MemeScope AI is designed around the judging priorities and constraints used to plan this repo: strong AI involvement, practical usefulness, a polished demo, and a required code repository plus demo video. For public reference, a third-party competition listing is here: [CompeteHub – Four.Meme AI Sprint](https://www.competehub.dev/en/competitions/dorahacksfourmemeaisprint). Before final submission, verify the exact official wording on DoraHacks.
 
 ## Core workflow
 
