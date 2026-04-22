@@ -12,7 +12,19 @@ import {
 } from '@/lib/schema';
 import { dedupeStrings, extractJsonObject, limitText } from '@/lib/utils';
 
-async function generateModelDraft(input: ReturnType<typeof normalizeInput>, enrichment: Awaited<ReturnType<typeof buildEnrichmentContext>>) {
+const ANALYSIS_BUDGET_MS = 22_000;
+const MIN_LLM_BUDGET_MS = 5_000;
+const MAX_LLM_TIMEOUT_MS = 12_000;
+
+function remainingBudget(deadlineAt: number) {
+  return deadlineAt - Date.now();
+}
+
+async function generateModelDraft(
+  input: ReturnType<typeof normalizeInput>,
+  enrichment: Awaited<ReturnType<typeof buildEnrichmentContext>>,
+  timeoutMs: number,
+) {
   const provider = getLlmProvider();
   const { systemPrompt, userPrompt } = buildAnalysisPrompts(input, enrichment);
   const completion = await provider.generateText({
@@ -20,6 +32,7 @@ async function generateModelDraft(input: ReturnType<typeof normalizeInput>, enri
     userPrompt,
     temperature: 0.2,
     maxTokens: 1800,
+    timeoutMs,
   });
 
   const jsonText = extractJsonObject(completion.text);
@@ -54,10 +67,24 @@ function finalizeReport(
 
 export async function analyzeProject(payload: AnalysisRequestPayload) {
   const input = normalizeInput(payload);
-  const enrichment = await buildEnrichmentContext(input);
+  const deadlineAt = Date.now() + ANALYSIS_BUDGET_MS;
+  const enrichment = await buildEnrichmentContext(input, { deadlineAt });
+  const remainingForModel = remainingBudget(deadlineAt);
+
+  if (remainingForModel < MIN_LLM_BUDGET_MS) {
+    return buildFallbackReport({
+      input,
+      enrichment,
+      reason: `Runtime budget exhausted before live model call (${Math.max(0, remainingForModel)}ms remaining).`,
+    });
+  }
 
   try {
-    const draft = await generateModelDraft(input, enrichment);
+    const draft = await generateModelDraft(
+      input,
+      enrichment,
+      Math.min(MAX_LLM_TIMEOUT_MS, Math.max(MIN_LLM_BUDGET_MS, remainingForModel - 500)),
+    );
     return finalizeReport(draft, input, enrichment);
   } catch (error) {
     return buildFallbackReport({
